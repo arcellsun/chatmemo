@@ -3292,17 +3292,32 @@ function disconnectSync(){
   setSyncStatus('off');closeModal();showToast('동기화 연결 해제됨');
 }
 
+// 기본 Firebase 설정 (자동 동기화)
+const _DEFAULT_FB_CONFIG = {
+  apiKey: "AIzaSyBXTc-DEL2eV5E8yWiuul9j1tLyM9J4oHg",
+  authDomain: "chatmemo-52ff6.firebaseapp.com",
+  projectId: "chatmemo-52ff6",
+  storageBucket: "chatmemo-52ff6.firebasestorage.app",
+  messagingSenderId: "977783949916",
+  appId: "1:977783949916:web:18f157ed7179118a037499"
+};
+const _DEFAULT_SYNC_KEY = "sun-memo-2026";
+
+// 앱 시작 시 Firebase 자동 연결
 document.addEventListener('DOMContentLoaded', () => {
   showDailyBriefing();
-  // Firebase 자동 연결
-  const _cfg=loadFirebaseConfig(),_sk=localStorage.getItem('sync_key');
-  if(_cfg&&_sk){startFirebaseSync(_cfg,_sk).then(ok=>{if(ok)showToast('🔄 동기화 연결됨');});}
   // 채팅 메시지 영역에 위젯 삽입
   const widget = renderChatWidget();
   const chatMessages = document.getElementById('chat-messages');
   if (chatMessages && chatMessages.firstChild) {
     chatMessages.insertBefore(widget, chatMessages.firstChild);
   }
+  // Firebase 자동 연결 (저장된 설정 없으면 기본값 사용)
+  const cfg = loadFirebaseConfig() || _DEFAULT_FB_CONFIG;
+  const sk = localStorage.getItem('sync_key') || _DEFAULT_SYNC_KEY;
+  startFirebaseSync(cfg, sk).then(ok => {
+    if (ok) showToast('🔄 동기화 연결됨');
+  });
 });
 
 </script>
