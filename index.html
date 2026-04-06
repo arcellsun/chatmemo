@@ -6,6 +6,9 @@
 <title>메모</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<!-- Firebase SDK (compat) -->
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 <style>
 :root {
   /* Gemini Light */
@@ -1594,6 +1597,10 @@ a { text-decoration: none; }
   <header class="app-header">
     <div class="header-title" id="header-title">채팅</div>
     <div class="header-actions">
+      <button class="hdr-btn" id="sync-btn" title="기기 동기화" style="position:relative">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+        <span id="sync-dot" style="position:absolute;top:4px;right:4px;width:7px;height:7px;border-radius:50%;background:#e0e0e0;border:1.5px solid var(--c-bg2);display:none"></span>
+      </button>
       <button class="hdr-btn" id="api-key-btn" title="AI 설정">
         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="5"/><path d="M9 11.5c-3 .8-5 2.6-5 4.5h16c0-1.9-2-3.7-5-4.5"/></svg>
       </button>
@@ -3217,8 +3224,79 @@ function closeModal() {
 }
 
 // 초기화
+// ============================================================
+// 25. FIREBASE 실시간 동기화
+// ============================================================
+let _fbApp=null,_fbDb=null,_fbUnsub=null,_syncKey=null,_syncPaused=false;
+function getSyncDot(){return document.getElementById('sync-dot');}
+function setSyncStatus(s){const d=getSyncDot();if(!d)return;d.style.display=s==='off'?'none':'block';const c={connecting:'#f29900',on:'#1e8e3e',error:'#d93025'};d.style.background=c[s]||'#e0e0e0';}
+function generateSyncKey(){return 'xxxx-xxxx-xxxx'.replace(/x/g,()=>Math.random().toString(36)[2]);}
+function loadFirebaseConfig(){try{return JSON.parse(localStorage.getItem('firebase_config')||'null');}catch{return null;}}
+async function startFirebaseSync(config,syncKey){
+  if(_fbUnsub){_fbUnsub();_fbUnsub=null;}
+  if(_fbApp){try{_fbApp.delete();}catch{}_fbApp=null;_fbDb=null;}
+  setSyncStatus('connecting');
+  try{
+    _fbApp=firebase.initializeApp(config,'chatmemo_'+Date.now());
+    _fbDb=firebase.firestore(_fbApp);
+    _syncKey=syncKey;
+    const col=_fbDb.collection('chatmemo').doc(syncKey).collection('items');
+    _fbUnsub=col.onSnapshot(snapshot=>{
+      if(_syncPaused)return;
+      snapshot.docChanges().forEach(change=>{
+        const key=change.doc.id,val=change.doc.data();
+        if(change.type==='removed'){if(storage._data[key]){delete storage._data[key];storage._data['index']=(storage._data['index']||[]).filter(k=>k!==key);storage._save();}}
+        else{const ex=storage._data[key],rt=val._updatedAt||0,lt=ex?(ex._updatedAt||ex.createdAt||0):0;if(!ex||rt>lt){storage._data[key]=val;if(!storage._data['index'].includes(key))storage._data['index'].push(key);storage._save();}}
+      });
+      if(currentTab==='memos')renderMemoList();
+      if(currentTab==='calendar')renderCalendar();
+      if(currentTab==='stats')renderStats();
+      if(currentTab==='timeline')renderTimeline();
+      setSyncStatus('on');
+    },err=>{console.error('Sync',err);setSyncStatus('error');});
+    setSyncStatus('on');return true;
+  }catch(e){setSyncStatus('error');console.error(e);return false;}
+}
+const _origSet=MemoStorage.prototype.setItem;
+MemoStorage.prototype.setItem=function(k,v){_origSet.call(this,k,v);if(_fbDb&&_syncKey){_syncPaused=true;_fbDb.collection('chatmemo').doc(_syncKey).collection('items').doc(k).set({...v,_updatedAt:Date.now()}).then(()=>{setTimeout(()=>{_syncPaused=false;},500);}).catch(()=>{_syncPaused=false;});}};
+const _origRm=MemoStorage.prototype.removeItem;
+MemoStorage.prototype.removeItem=function(k){_origRm.call(this,k);if(_fbDb&&_syncKey){_syncPaused=true;_fbDb.collection('chatmemo').doc(_syncKey).collection('items').doc(k).delete().then(()=>{setTimeout(()=>{_syncPaused=false;},500);}).catch(()=>{_syncPaused=false;});}};
+
+document.getElementById('sync-btn').addEventListener('click',()=>{
+  const cfg=loadFirebaseConfig(),sk=localStorage.getItem('sync_key')||'',isOn=!!_fbDb;
+  openModal(`<div class="modal-handle"></div><div class="modal-header"><div class="modal-title">🔄 기기 동기화</div></div><div class="modal-body">
+${isOn?'<div style="display:flex;align-items:center;gap:8px;margin-bottom:16px;padding:10px 14px;background:rgba(30,142,62,0.1);border-radius:10px"><span style="width:9px;height:9px;border-radius:50%;background:#1e8e3e;display:inline-block"></span><span style="font-size:13px;color:var(--c-green);font-weight:500">동기화 연결됨</span></div>':'<div style="font-size:13px;color:var(--c-label2);line-height:1.7;margin-bottom:16px">컴퓨터와 핸드폰 연동을 위해 Firebase 설정이 필요해요.<br><a href=\"https://console.firebase.google.com\" target=\"_blank\" style=\"color:var(--c-blue)\">console.firebase.google.com</a>에서 무료 프로젝트를 만드세요.</div>'}
+<div class="modal-field"><label class="modal-label">🔑 동기화 코드</label><div style="display:flex;gap:8px;align-items:center"><input type="text" class="modal-input" id="sync-key-input" placeholder="자동 생성됩니다" value="${esc(sk)}" style="flex:1;font-family:monospace;font-size:13px"><button class="btn-secondary" style="padding:8px 12px;white-space:nowrap" onclick="document.getElementById('sync-key-input').value=generateSyncKey()">🎲</button><button class="btn-secondary" style="padding:8px 12px" onclick="navigator.clipboard.writeText(document.getElementById('sync-key-input').value).then(()=>showToast('복사됨 ✓'))">📋</button></div><p style="font-size:12px;color:var(--c-label3);margin-top:6px">⚡ 같은 코드를 모든 기기에 입력하면 메모가 연동돼요</p></div>
+<div class="modal-field"><label class="modal-label">🔥 Firebase 설정 (JSON)</label><textarea class="modal-input" id="fb-config-input" rows="5" placeholder='{"apiKey":"AIza...","authDomain":"...","projectId":"...","storageBucket":"...","messagingSenderId":"...","appId":"..."}' style="font-family:monospace;font-size:12px;resize:vertical">${cfg?JSON.stringify(cfg,null,2):''}</textarea><p style="font-size:12px;color:var(--c-label3);margin-top:6px">Firebase 콘솔 → 프로젝트 설정 → 앱 추가(웹) → SDK 설정에서 복사</p></div>
+${!isOn?'<details style=\"margin-top:4px\"><summary style=\"font-size:12px;color:var(--c-blue);cursor:pointer\">📖 설정 방법 보기</summary><div style=\"font-size:12px;color:var(--c-label2);line-height:1.8;margin-top:8px;padding:10px;background:var(--c-bg3);border-radius:8px\">1. Firebase 콘솔 → 프로젝트 만들기 (무료)<br>2. Firestore Database → 만들기 → <b>테스트 모드</b><br>3. 프로젝트 설정(⚙️) → 내 앱 → 웹앱 추가(&lt;/&gt;)<br>4. firebaseConfig를 복사해서 위에 붙여넣기<br>5. 동기화 코드 생성 후 모든 기기에 동일 입력</div></details>':''}
+</div><div class="modal-actions"><button class="btn-primary" onclick="saveSyncConfig()">연결하기</button><button class="btn-secondary" onclick="closeModal()">닫기</button>${isOn?'<button class=\"btn-danger\" onclick=\"disconnectSync()\">연결 해제</button>':''}</div>`);
+});
+
+async function saveSyncConfig(){
+  const t=document.getElementById('fb-config-input').value.trim(),k=document.getElementById('sync-key-input').value.trim();
+  if(!t){showToast('Firebase 설정을 입력해주세요');return;}
+  if(!k){showToast('동기화 코드를 입력해주세요');return;}
+  let cfg;try{cfg=JSON.parse(t);}catch{showToast('JSON 형식이 올바르지 않아요');return;}
+  if(!cfg.projectId){showToast('projectId가 없어요');return;}
+  showToast('연결 중…');
+  localStorage.setItem('firebase_config',JSON.stringify(cfg));
+  localStorage.setItem('sync_key',k);
+  const ok=await startFirebaseSync(cfg,k);
+  closeModal();
+  showToast(ok?'✅ 동기화 연결됨! 이제 모든 기기에서 메모가 연동돼요':'❌ 연결 실패. Firebase 설정을 확인해주세요');
+}
+function disconnectSync(){
+  if(_fbUnsub){_fbUnsub();_fbUnsub=null;}
+  if(_fbApp){try{_fbApp.delete();}catch{}_fbApp=null;_fbDb=null;}
+  localStorage.removeItem('firebase_config');localStorage.removeItem('sync_key');
+  setSyncStatus('off');closeModal();showToast('동기화 연결 해제됨');
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   showDailyBriefing();
+  // Firebase 자동 연결
+  const _cfg=loadFirebaseConfig(),_sk=localStorage.getItem('sync_key');
+  if(_cfg&&_sk){startFirebaseSync(_cfg,_sk).then(ok=>{if(ok)showToast('🔄 동기화 연결됨');});}
   // 채팅 메시지 영역에 위젯 삽입
   const widget = renderChatWidget();
   const chatMessages = document.getElementById('chat-messages');
